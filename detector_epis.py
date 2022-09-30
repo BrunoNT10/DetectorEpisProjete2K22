@@ -8,6 +8,17 @@ import pandas as pd
 import os
 from tkinter import *
 import tkinter as tk
+import serial
+from time import sleep
+from operator import truediv
+from turtle import width
+import pandas as pd 
+import pyautogui as pg
+import time 
+import webbrowser as web
+
+font = cv2.FONT_HERSHEY_COMPLEX_SMALL
+
 
 config = {
     "apiKey": "AIzaSyDVyPsRvmfFwH3hASMeqLrpMElyeP48RRw",
@@ -42,13 +53,12 @@ if(empresa == ""):
 
     with open("config/config.json", "w") as arquivo_nome_empresa:
         arquivo_nome_empresa.write(object_json_nome_empresa)
-        print("Nome da empresa salvo com sucesso!")
 
 # ---------- IDENTIFICAÇÃO DO FUNCIONÁRIO ----------
 
 def AbrirCamera():
 
-    camera = cv2.VideoCapture(0)
+    camera = cv2.VideoCapture(1)
 
     return camera
 
@@ -97,7 +107,6 @@ def CriarNomeArquivos(nome_funcionario, data):
 def DefinirTempoInicial():
     momento_inicial = datetime.now()
     segundos_inicio = momento_inicial.second
-    print("Verificação INICIADA no segundo ", segundos_inicio)
     return segundos_inicio
 
 def DefinirTempoExecucao():
@@ -161,13 +170,45 @@ def CriarTabelaExcel(json_epis_encontradas, nome_arquivo_excel):
 
         if(excluir_linha_extra):
             dataframe_epis = dataframe_epis.drop(columns="Unnamed: 0")
-
-        print(dataframe_epis)
         
         dataframe_epis.to_excel(nome_arquivo_excel)
 
+def EnviarJsonFirebase(nome_empresa, nome_funcionario, data, epis_encontradas):
+    db = firebase.database()
+
+    path_firebase = nome_empresa + "/json_funcionarios/" + nome_funcionario
+    valor_json_funcionario = {data: epis_encontradas}
+
+    db.child(path_firebase).update(valor_json_funcionario)
+
+def EnviarWhatsapp(nome_funcionario):
+    data = pd.read_csv("arquivo_csv/Lista_numeros_pesquisa_sk.csv", sep=";")
+# data
+
+#fazendo o envio
+    data_dict = data.to_dict('list')
+
+    leads = data_dict['WhatsApp']
+    messages = data_dict['msg']
+    combo = zip(leads,messages)
+    first = True
+    for lead, message in combo:
+        time.sleep(4)
+        message = "Funcionário {} não está usando todas as EPI's".format(nome_funcionario)
+        web.open("https://web.whatsapp.com/send?phone="+lead+"&text="+message)
+        if first:
+            time.sleep(6)
+            first=False
+        width,height = pg.size()
+        pg.click(width/2,height/2)
+        time.sleep(8)
+        pg.press('esc')
+        time.sleep(5)
+        pg.press('enter')
+        time.sleep(10)
+        pg.hotkey('ctrl', 'w')
+
 def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
-    print("Iniciando a identificação das EPIS...")
 
     camera = AbrirCamera()
 
@@ -188,7 +229,7 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
 
     capacete_necessario, luvas_necessario, botas_necessario, mascara_necessario, pa_necessario, colete_necessario = False, False, False, False, False, False
     capacete_detectado, luvas_detectado, botas_detectado, mascara_detectado, pa_detectado, colete_detectado = False, False, False, False, False, False
-    epis_encontradas = False
+    todas_epis_encontradas = False
 
     for x in lista_epis_necessarias:
         if(x == "capacete"):
@@ -210,9 +251,12 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
             colete_necessario = True
 
     numero_epis_verificacao = len(lista_epis_necessarias)
-    print(lista_epis_necessarias)
 
     tempo_inicio_while = DefinirTempoInicial()
+
+    num_deteccao_capacete, num_deteccao_luvas, num_deteccao_botas, num_deteccao_pa, num_deteccao_mascara, num_deteccao_colete = 0, 0, 0, 0, 0, 0 
+
+    todas_epis_detectadas = False
 
     while True:
         _, video = camera.read()
@@ -225,48 +269,69 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
             break
         
         video = cv2.resize(video, (800, 600))
+        video = cv2.rectangle(video, (300, 0), (500, 200), (0, 0, 0), 2)
+        video = cv2.rectangle(video, (0, 200), (800, 400), (0, 0, 0), 2)
+        video = cv2.rectangle(video, (0, 400), (800, 600), (0, 0, 0), 2)
+        
         video = cv2.cvtColor(video, cv2.COLOR_BGR2GRAY)
         video_detectar_capacete = video[0:200, 300:500]
+        # video_detectar_capacete = cv2.resize(video_detectar_capacete, (800, 800))
+
         video_detectar_luvas = video[200:400, 0:800]
+        # video_detectar_luvas = cv2.resize(video_detectar_luvas, (1600, 400))
         video_detectar_botas = video[400:600, 0:800]
+        # video_detectar_botas = cv2.resize(video_detectar_botas, (400, 1600))
 
         if(capacete_necessario and capacete_detectado == False):
 
-            # print("Buscando capacete...")
-            deteccao_capacete = cascade_capacete.detectMultiScale(video_detectar_capacete, scaleFactor=1.02, minNeighbors=10)
-            # print("capacete: ", deteccao_capacete)
+            deteccao_capacete = cascade_capacete.detectMultiScale(video_detectar_capacete, scaleFactor=1.02, minNeighbors=10, minSize=(30,30))
+
             for(w, x, y, z) in deteccao_capacete:
-                cv2.rectangle(video_detectar_capacete, (w, x), (w + y, x + z), (0, 255, 0), 2)
+                # w = int(w/4)
+                # z = int(z/4)
+                # x = int(x/4)
+                # y = int(y/4)
+                cv2.rectangle(video, (w + 300, x), (w + y + 300, x + z), (255, 255, 255), 2)
+                cv2.putText(video, str("CAPACETE"), (w + 300, x + z + 20), font, 1, (255, 255, 255))
 
             if(deteccao_capacete != ()):
-                # print("Capacete detectado!")
-                print("capacete")
 
+                num_deteccao_capacete = num_deteccao_capacete + 1
+
+                print("capacete")
+            
+            if(num_deteccao_capacete == 20):
                 capacete_detectado = True
                 numero_epis_verificacao = numero_epis_verificacao - 1
 
             else:
                 capacete_detectado = False
-            
+
         if(luvas_necessario and luvas_detectado == False):
 
-            # print("Buscando luvas...")
-            deteccao_luvas = cascade_luvas.detectMultiScale(video_detectar_luvas, scaleFactor=1.02, minNeighbors=10)
-
-            # print("luvas: ", deteccao_luvas)
+            deteccao_luvas = cascade_luvas.detectMultiScale(video_detectar_luvas, scaleFactor=1.02, minNeighbors=10, minSize=(20, 20))
 
             for(w, x, y, z) in deteccao_luvas:
-                cv2.rectangle(video_detectar_luvas, (w, x), (w + y, x + z), (0, 0, 255), 2)
+                # w = int(w/2)
+                # z = int(z/2)
+                # y = int(y/2)
+                # x = int(x/2)
+                cv2.rectangle(video, (w, x + 200), (w + y, x + z + 200), (255, 255, 255), 2)
+                cv2.putText(video, str("LUVA"), (w, x + z + 220), font, 1, (255, 255, 255))
+
 
             if(deteccao_luvas != ()):
-                # print("luvas detectado!")
-                luvas_detectado = True
+                num_deteccao_luvas = num_deteccao_luvas + 1
+
                 print("Luvas")
+            
+            if(num_deteccao_luvas == 20):
+                luvas_detectado = True
                 numero_epis_verificacao = numero_epis_verificacao - 1
 
             else:
                 luvas_detectado = False
-        
+
         if(colete_necessario and colete_detectado == False):
 
             deteccao_colete = cascade_colete.detectMultiScale(video_detectar_luvas, scaleFactor=1.02, minNeighbors=10)
@@ -274,17 +339,26 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
             # print("colete: ", deteccao_colete)
 
             for(w, x, y, z) in deteccao_colete:
-                cv2.rectangle(video_detectar_luvas, (w, x), (w + y, x + z), (255, 0, 0), 2)
+                cv2.rectangle(video, (w, x), (w + y, x + z), (255, 255, 255), 2)
+                # w = int(w/2)
+                # z = int(z/2)
+                # y = int(y/2)
+                # x = int(x/2)
+                # cv2.rectangle(video, (w, x + 200), (w + y, x + z + 200), (0, 0, 255), 2)
+                cv2.putText(video, str("COLETE"), (w, x + z + 220), font, 1, (255, 255, 255))
 
             if(deteccao_colete != ()):
                 # print("colete detectado!")
                 print("Colete")
+                num_deteccao_colete = num_deteccao_colete + 1
+            
+            if(num_deteccao_colete == 20):
                 colete_detectado = True
                 numero_epis_verificacao = numero_epis_verificacao - 1
 
             else:
                 colete_detectado = False
-
+            
         if(mascara_necessario and mascara_detectado == False):
 
             deteccao_mascara = cascade_mascara.detectMultiScale(video_detectar_capacete, scaleFactor=1.02, minNeighbors=10)
@@ -292,13 +366,21 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
             # print("colete: ", deteccao_mascara)
 
             for(w, x, y, z) in deteccao_mascara:
-                cv2.rectangle(video_detectar_capacete, (w, x), (w + y, x + z), (255, 0, 0), 2)
+                # w = int(w/4)
+                # z = int(z/4)
+                # x = int(x/4)
+                # y = int(y/4)
+                cv2.rectangle(video, (w + 300, x), (w + y + 300, x + z), (255, 255, 255), 2)
+                cv2.putText(video, str("MASCARA"), (w + 300, x + z + 20), font, 1, (255, 255, 255))
 
             if(deteccao_mascara != ()):
                 # print("mascara detectado!")
-                mascara_detectado = True
                 print("mascara")
 
+                num_deteccao_mascara = num_deteccao_mascara + 1
+
+            if(num_deteccao_mascara == 20):
+                mascara_detectado = True
                 numero_epis_verificacao = numero_epis_verificacao - 1
 
             else:
@@ -308,14 +390,18 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
 
             deteccao_pa = cascade_pa.detectMultiScale(video_detectar_capacete, scaleFactor=1.02, minNeighbors=10)
 
-            for(w, x, y, z) in deteccao_pa:
-                cv2.rectangle(video_detectar_capacete, (w, x), (w + y, x + z), (255, 0, 255), 2)
+            # for(w, x, y, z) in deteccao_pa:
+            #     cv2.rectangle(video, (w, x), (w + y, x + z), (255, 0, 255), 2)
 
             if(deteccao_pa != ()):
                 # print("pa detectado!")
-                pa_detectado = True
+
+                num_deteccao_pa = num_deteccao_pa + 1
+
                 print("pa")
 
+            if(num_deteccao_pa == 20):
+                pa_detectado = True
                 numero_epis_verificacao = numero_epis_verificacao - 1
 
             else:
@@ -326,13 +412,16 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
             deteccao_botas = cascade_botas.detectMultiScale(video_detectar_botas, scaleFactor=1.02, minNeighbors=10)
 
             for(w, x, y, z) in deteccao_botas:
-                cv2.rectangle(video_detectar_botas, (w, x), (w + y, x + z), (255, 0, 255), 2)
+                cv2.rectangle(video, (w, x), (w + y, x + z), (255, 0, 255), 2)
 
             if(deteccao_botas != ()):
                 # print("botas detectado!")
-                botas_detectado = True
                 print("botas")
+                num_deteccao_botas = num_deteccao_botas + 1
 
+                
+            if(num_deteccao_botas == 20):
+                botas_detectado = True
                 numero_epis_verificacao = numero_epis_verificacao - 1
 
             else:
@@ -343,18 +432,52 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
             break
 
         if(numero_epis_verificacao == 0):
+            todas_epis_encontradas = True
+            epis_encontradas = True
+            EnviarJsonFirebase(empresa, nome_funcionario, data, epis_encontradas)
+            ser = serial.Serial("COM4")
+            valor = "A"
             cv2.imwrite(nome_arquivo_imagem, video)
+            iniciar_script = ser.readline().decode("utf-8")
+
+            while True:
+                ser.flush()
+                ser.write(valor.encode())
+
+                if ser.inWaiting() > 0:
+                    print(ser.readline())
+                    if ser.readline().decode("utf-8") == "led\r\n":
+                        ser.flush()
+                        ser.close()
+                        break
+            
+            ser = serial.Serial("COM4")
+
+            a = 0
+            valor = "B"
+            while a < 100:
+                ser.flush()
+                ser.write(valor.encode())
+                a = a+1
+
+
             print("Todas as epis foram encontradas!!!!!")
             break
 
         cv2.imshow("Identificação funcionário", video)
-        cv2.imshow("Video detecção capacete", video_detectar_capacete)
-        cv2.imshow("Video detecção colete", video_detectar_luvas)
-        cv2.imshow("Video detectar botas", video_detectar_botas)
+        # cv2.imshow("Video detecção capacete", video_detectar_capacete)
+        # cv2.imshow("Video detecção colete", video_detectar_luvas)
+        # cv2.imshow("Video detectar botas", video_detectar_botas)
 
     camera.release()
 
     cv2.destroyAllWindows()
+
+    if(todas_epis_encontradas == False):
+        EnviarWhatsapp(nome_funcionario)
+        epis_encontradas = False
+        EnviarJsonFirebase(empresa, nome_funcionario, data, epis_encontradas)
+
     
     # CÓDIGO PARA CRIAR O DICIONÁRIO DAS EPIS ENCONTRADAS
 
@@ -427,6 +550,7 @@ def IdentificarEPIS(nome_funcionario, lista_epis_necessarias):
 
     CriarTabelaExcel(json_epis_encontradas, nome_arquivo_excel)
 
+
     resposta_envio_arquivos_firebase = EnviarArquivosFirebase(nome_arquivo_imagem, nome_arquivo_excel, nome_arquivo_imagem_firebase, nome_arquivo_excel_firebase)
 
     if(resposta_envio_arquivos_firebase):
@@ -460,9 +584,11 @@ def CriarListaEpisNecessarias(epis_necessarias):
     return lista_epis_necessarias
 
 def BuscarFuncionario(nome_funcionario):
+    print(nome_funcionario)
     db = firebase.database()
     print("Conexão ao banco de dados efetuada com sucesso!")
     base_dados_funcionario = empresa+"/funcionarios/"+nome_funcionario
+    print(base_dados_funcionario)
 
     dados_funcionario = db.child(base_dados_funcionario).get()
 
@@ -479,7 +605,7 @@ def BuscarFuncionario(nome_funcionario):
     epis_necessarias = dados_epis.val()
 
     lista_epis_necessarias = CriarListaEpisNecessarias(epis_necessarias)
-
+    teste_atencao_necessario = False
     if(teste_atencao_necessario):
         teste_atencao_realizado = dados_funcionario.val()['teste_realizado']
         if(teste_atencao_realizado):
@@ -491,21 +617,127 @@ def BuscarFuncionario(nome_funcionario):
     else:
         IdentificarEPIS(nome_funcionario, lista_epis_necessarias)
 
+    db.child(base_dados_funcionario).update({"teste_realizado": False})
+
     return
 
 def UsarDeteccaoFacial():
-    print("Usar deteccção facial")
-    nome_funcionario = input("Digite o nome do funcionário: ")
+    # camera = cv2.VideoCapture(0)
+
+    # classificadorFace = cv2.CascadeClassifier("cascades/haarcascade_frontalface_default.xml")
+    # reconhecedor = cv2.face.LBPHFaceRecognizer_create()
+
+    # reconhecedor.read("classificadores/classificadorLBPH.yml")
+
+    # largura, altura = 220, 220
+
+    # font = cv2.FONT_HERSHEY_COMPLEX_SMALL
+
+    # face_detectada = 0
+
+    # while True:
+    #     _, video = camera.read()
+    #     videoCinza = cv2.cvtColor(video, cv2.COLOR_BGR2GRAY)
+
+    #     facesDetectadas = classificadorFace.detectMultiScale(videoCinza, scaleFactor=1.1, minSize=(30, 30))
+
+    #     for(x, y, l, a) in facesDetectadas:
+    #         imagemFace = cv2.resize(videoCinza[y:y + a, x:x + l], (largura, altura))
+
+    #         cv2.rectangle(video, (x, y), (x + l, y + a), (0, 0, 255), 2)
+
+    #         id, confianca = reconhecedor.predict(imagemFace)
+
+    #         with open("json/nomes_funcionarios.json", encoding="utf-8") as json_funcionarios:
+    #             json_nome_funcionarios = json.load(json_funcionarios)
+
+    #         nome_funcionario = "Funcionario nao detectado!"
+    #         # print(id)
+
+    #         if(id != -1):
+    #             face_detectada = face_detectada + 1
+    #             nome_funcionario = json_nome_funcionarios[str(id)]
+
+    #         cv2.putText(video, str(nome_funcionario), (x, y + (a + 30)), font, 1, (0, 0, 255))
+
+    #     cv2.imshow("Face", video)
+    #     if cv2.waitKey(1) == ord("q"):
+    #         break
+
+    #     if face_detectada == 10:
+    #         break
+
+    # camera.release()
+
+    # cv2.destroyAllWindows()
+    nome_funcionario = input()
+    
     BuscarFuncionario(nome_funcionario)
     
 def UsarBiometria():
-    print("Usar biometria")
-    nome_funcionario = input("Digite o nome do funcionário: ")
+    ser = serial.Serial("COM4")
+
+    valor = "L"
+    print(valor.encode())
+
+    verificacaoIniciada = False
+    while True:
+        ser.write(valor.encode())
+
+        if ser.inWaiting() > 0:
+            print(ser.readline())
+
+        if ser.readline().decode("utf-8") == "65535\r\n":
+            verificacaoIniciada = True
+
+        if verificacaoIniciada == True:
+            valorId = ser.readline().decode("utf-8").rstrip("\n").rstrip("\r")
+            # print(valorId)
+
+            if(valorId != "65535"):
+                print("Id detectado: ", valorId)
+                print("Biometria detectada!")
+                break
+
+            # if(ser.readline().decode("utf-8") != "65535\r\n"):
+            #     print("Biometria detectada!")
+
+    with open("json/funcionarios_id_biometria.json", encoding="utf-8") as json_ids:
+        json_ids_funcionarios = json.load(json_ids)
+
+    nome_funcionario = json_ids_funcionarios[valorId]
+
+    ser.close()
+
+    print(nome_funcionario)
     BuscarFuncionario(nome_funcionario)
 
 def UsarRFID():
-    print("Usar RFID")
-    nome_funcionario = input("Digite o nome do funcionário: ")
+    ser = serial.Serial("COM4")
+
+    valor = "R"
+
+    while True:
+        id_cartao = ser.readline()
+        print(id_cartao)
+        if(id_cartao.decode() == "1\r\n"):
+            print("Id detectada")
+            break
+    
+    id_cartao = ser.readline()
+
+    id_cartao = id_cartao.decode("utf-8")
+    id_cartao = id_cartao.rstrip("\n")
+    id_cartao = id_cartao.rstrip("\r")
+
+    with open("json/nome_funcionario_RFID.json", encoding="utf-8") as json_nome_funcionarios:
+        json_funcionarios = json.load(json_nome_funcionarios)
+
+    nome_funcionario = json_funcionarios[id_cartao]
+
+    ser.close()
+
+    print(nome_funcionario)
     BuscarFuncionario(nome_funcionario)
 
 janela = tk.Tk()
